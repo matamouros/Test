@@ -1,1 +1,242 @@
-Ola Pedro!
+##Athena/EFSET integration scenarios
+
+The following correspond to a set of generic integration scenarios for EFSET and/or Athena.
+
+###Type I
+
+ + Journey hosted by third party client app
+ + No EFID integration, uses legacy layer of Athena
+ + Integration with Athena-server (test session/test group creation) and Athena-client (iframe)
+ + Results pushed to client provided callback
+ + User not able to revisit results on EFSET.org
+ 
+An example of a Type I integration is the MyEF app used for Level Progress testing in ILS. It does not require EFID integration, it merely uses the legacy layer of the Athena API. The only integration points are the session creation with the Athena-server legacy API and the iframe opening with Athena-client for the actual test. There are no results being shown, nor are there any intermission pages, as the requirement for Level Progress is one single fixed-form test. The results, despite not being shown, are always pushed to an endpoint provided by the client application - in this case the Elektra system.
+ 
+ 
+###Type II
+
+ + Journey hosted by third party client app
+ + Full EFID integration, manual or automated (automatic user registration/login), use of EFID OAuth authorisation tokens
+ + Integration with Athena-server (test session/test group creation) and Athena-client (iframe)
+ + Results pushed to client provided callback
+ + User is able to revisit results on EFSET.org
+ 
+A Type II integration would be very much like a Type I one, with the exception that an EFID integration would be in effect. A mechanism for manually registering or logging in a user to EFID will exist, or there will exist an automated process to register or login the user with EFID. In a Type II integration this would have to be implemented on the client app.
+
+
+###Type III
+
+ + Hosted by third party client app
+ + EFSET journey widget provides a fully configurable EFSET user journey experience
+ 
+This type of integration differs significantly from the previous ones, in the sense that the only effort required for it is integrating the EFSET widget on the client app. The complete test taking and/or EFSET experience is then controlled by the EFSET widget. There will exist a previously created configuration file, specific to a client app, that will be used by the EFSET widget to tailer this user journey.
+
+ 
+###Type IV
+
+ + Journey hosted by EFSET.org on a different URL, e.g., ```www.efset.org/etown```
+ + EFSET tracks user provenience and also data sent by client (query string with encoded data structure)
+ + Possibility of different homepage per integration
+ + EFSET journey widget provides a fully configurable EFSET user journey experience
+ 
+A Type IV integration happens fully on EFSET.org, instead of the client app. As part of the process of integrating with EFSET, the client app will append to the query string of the EFSET.org redirection a data structure with user information (see more below). A client can have a costumised homepage, different from the one on the core EFSET.org journey. Clients will also have specific configuration files that will dictate exactly how the user journey through the EFSET widget will be.
+
+
+##User data structure
+
+### Method for receiving data
+There are two possible methods for receiving the data initially:
+ + via snippet interface (for Type III  integrations)
+ + via query string (for both Type III and Type IV)
+We are going to go ahead and implement via query string method, as this caters for both integration situations.
+
+The data structure needs to be sent to Elasticsearch. As such this is the template to be used:
+```json
+[{
+    "type": "userdata",
+  	"host_id": "ef.com"
+    "data": {
+        "given_name": "Pedro",
+        "family_name": "Mata-Mouros",
+        "email": "pedro.matamouros@ef.com",
+        "reason": "I am preparing for a TOEFL",
+        "bd_year": "1978",
+        "country_name": "Portugal",
+        "country_code": "PT",
+        "city": "Lisbon",
+        "gender": "male"
+    }
+}]
+```
+
+This kind of structure plays well with the already established JSON payloads we are sending to Elasticsearch and accessing in Kibana. Decisions for the data structure:
+ + Fields are to be whitelisted in the configuration file. Only whitelisted fields can actually be dumped into Elasticsearch
+ + Needs to be obfuscated, due to being passed on the query string and for carrying obvious user info
+ + Configuration option to specify how relaxed is validation of the structure for an integration: should we allow use even if not everything is passed?
+
+=> What to use to obfuscate the data structure? Needs to go all the way down to IE8, ideally something native. Some references:
+ + https://developer.mozilla.org/en-US/docs/Web/API/WindowBase64/btoa
+ + btoa/atob is IE10+, so we need the following for lower: https://code.google.com/p/javascriptbase64/
+
+### Where to persist
+We decided not to keep any data around for later saving, so that means that as soon as we get data we should dump it immediately. We require the creation of a randomly generated ID, that we will use to mark that user’s session and thus all data pushed into Elasticsearch. We will keep pushing data structures of different types into Elasticsearch, using the same generated ID to correlate them.
+
+=> How to make sure no two client-side generated IDs are the same? Some referrences to look into:
+ + https://github.com/pnegri/uuid-js
+ + https://www.npmjs.com/package/node-time-uuid
+
+##The EFSET journey
+
+On the following table is a representation of the core EFSET.org journey and the client journeys (assured by the EFSET widget). Each of the sections on EFSET.org is a modular component on the EFSET widget, configurable to be or not a part of that journey. This widget is a one line of Javascript code integration, placed on the client's app and wrapped with HTML such as headers and footers and other design elements. The actual look & feel for the user journey itself, i.e., the contents of the widget, is _unchangable_.
+
+
+|            | Homepage | Landing pages | EFID login/registration | Start test | Intermission | Demographics | Results |
+| :--------: | :------: | :-----------: | :---------------------: | :--------: | :----------: | :----------: | :-----: |
+| EFSET.org  | x | x | x | x | x | x | x |
+| ETown      | - | - | - | x | x | - | x |
+
+
+##Integration
+
+The client app integrates a simple Javascript snippet of code. The client app will have a previously created configuration file, specifically tailored for that integration, by the EFSET team. This snippet bootstraps the actual EFSET widget. Once the widget loads and consumes that configuration file, the complete EFSET user journey is controlled by the widget.
+
+Following is the general bootstrap for the snippet:
+ 
+ 1. Set configuration for the widget
+ 2. Load the widget script
+
+Following is the general bootstrap for the widget:
+
+ 1. Load configuration for the particular client using a URL reference, e.g., `efset`
+ 2. Register user with EFID, in case EFID integration is required
+ 3. Load and run the configured components from the configuration
+
+  
+###The snippet
+
+The snippet prepares client-side configuration, e.g., client ID, and then loads the actual widget script from a CDN.
+
+####Example of snippet code for client integration
+
+
+```html
+<script type="text/javascript">
+
+  var _athena = _athena || [];
+  _athena.push(['_client', 'xxxxx']);
+  _athena.push(['_user_id', 'provided-user-id']);
+
+  (function() {
+    var tla = document.createElement('script'); tla.type = 'text/javascript'; tla.async = true;
+    tla.src = ('https:' == document.location.protocol ? 'https://' : 'http://') + 'et.ef-cdn.com/widget.js';
+    var s = document.getElementsByTagName('script')[0]; 
+    s.parentNode.insertBefore(tla, s);
+  })();
+</script>
+```
+
+####Configuration
+
+Following is a vanilla configuration for a snippet code:
+
+| Key | Value | Description |
+| --- | --- | --- |
+| `_client` _(required)_ | PROVIDED | provided from a snippet configuration |
+| `_user_id` _(optional)_ | String | Provided `user_id` for `provided-user-id` authentication type (ex.: `provided-user-id`) |
+| `_access_token` _(optional)_ | String | Provided `access_token` for `provided-efid` authenticaion type (ex.: `uuid:a1ddc265-445d-3979-8a86-bc2e6988f347`) |
+
+
+###The widget
+
+Each client app will have their own widget script pre-configured and pre-cached on CDN and mapped by the client ID to it. This approach provides total control for all client integrations.
+
+
+####Configuration
+
+Following is a vanilla configuration for a client app, a `JSON` object with defined parameters:
+
+| Key | Value | Description |
+| --- | --- | --- |
+| `client_id` _(required)_ | String (PROVIDED) | provided from a snippet configuration |
+| `auth` _(optional)_ | `efid-manual` \| `efid-auto` \| `single` \| `provided-efid` \| `provided-user-id` \| `none` | parameter that shows what type of authentication should be used for the client:<br />`efid-manual` - user is will be redirected to EFID sign in form for manual authentication;<br />`efid-auto` - user will be registered and authenticated with EFID automaticaly;<br />`single` - single time usage authentication with random `user_id` to be used with the Legacy API;<br />`provided-efid` - client host provide `access_token` from EFID;<br />`provided-user-id` - client-host provide user id to be used with the Legacy API;<br />`none` - _(default)_ no authentication (means that all the components that needs authentication will be bypassed) |
+| `user_id` _(optional)_ | String (PROVIDED) | Provided `user_id` for `provided-user-id` authentication type (ex.: `provided-user-id`) |
+| `access_token` _(optional)_ | String (PROVIDED)  | Provided `access_token` for `provided-efid` authenticaion type (ex.: `uuid:a1ddc265-445d-3979-8a86-bc2e6988f347`) |
+| `components` _(required)_ | Array | List of components that are needed for the client host:<br />`choose-test`, `start-test`, `run-test`, `intermission`, `demographics`, `results` |
+
+
+**Example of a vanilla configuration**
+
+```json
+
+{
+	"client_id": "PROVIDED",
+	"auth": "(efid-manual|efid-auto|single|provided-efid|provided-user-id|none)",
+	"user_id": "PROVIDED",
+	"access_token": "PROVIDED",
+	"components": [
+		"choose-test",
+		"start-test",
+		"run-test",
+		"intermission",
+		"demographics",
+		"results"
+	]
+}
+
+```
+
+
+####Registration
+
+If `auth` parameter is defined, widget script runs appropriate method to authenticate user. All components are called one after the other using promises from [`when.js`](https://github.com/cujojs/when/blob/master/docs/api.md#api) library to control the workflow. Each component is responsible for its part of the user journey and is independent from the others, however any component can pass some data to the next called component by returning it from its own execution. Each component implements interface methods that are calling respectively:
+
+| Method | Description |
+| --- | --- |
+| `sig/init` | Component initialization |
+| `sig/start` | Main component execution |
+| `sig/save` | Saving state of the component if execution is suddenly stopped (is it needed?) |
+| `sig/end` | Final touch for the running component to finish its execution |
+
+
+Each init method is called with a list of parameters from the previous component.
+
+**Example component**
+
+```javascript
+
+define([
+	"component"
+], function ExampleComponent(Component) {
+	return Component.extend({
+		"passed_data": null,
+		
+		"sig/init": function(data) {
+			var me = this;
+			passed_data = data; // saving passed data
+			
+			return; 
+		},
+		"sig/start": function() {
+			var me = this;
+			// some code
+			
+			return {"some data": 1}; 
+		},
+		"sig/save": function() {
+			var me = this;
+			// some code
+
+			return;
+		},
+		"sig/end": function() {
+			var me = this;
+			// some code
+
+			return;
+		}
+	});
+});
+
+```
+
+NOTE: Theoretically each component could be called several times in one flow with different initialising parameters, which provides the opportunity to combine them in any order and use them in many different cases with any levels of tests.
